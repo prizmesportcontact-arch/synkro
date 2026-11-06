@@ -85,8 +85,8 @@ const Store = {
   chef() { return this.agent("chef") || this.agents[0]; },
   critique() { return this.agent("critique"); },
 
-  hasKey(p) { return !!this.providers[p]?.key; },
-  activeProviders() { return ["gemini", "openai", "anthropic"].filter(p => this.hasKey(p)); },
+  hasKey(p) { return p === "integre" ? !!SAMPLE : !!this.providers[p]?.key; },
+  activeProviders() { return ["integre", "gemini", "openai", "anthropic"].filter(p => this.hasKey(p)); },
 
   /** Détermine quelle IA utilise réellement un agent.
    *  "auto" → la première IA qui a une clé ; sinon démo.
@@ -98,7 +98,7 @@ const Store = {
     if (provider === "auto" || !provider) provider = active[0] || "demo";
     else if (provider !== "demo" && !this.hasKey(provider)) { fallback = true; provider = active[0] || "demo"; }
     const cfg = this.providers[provider] || {};
-    const model = provider === "demo" ? "demo"
+    const model = provider === "demo" ? "demo" : provider === "integre" ? "intégré"
       : (agent.provider === provider && agent.model) ? agent.model
       : cfg.model || PROVIDERS[provider].defaultModel;
     return { provider, model, key: cfg.key || "", fallback };

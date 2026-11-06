@@ -19,6 +19,19 @@ async function copy(text, msg = "Copié !") {
   try { await navigator.clipboard.writeText(text); toast(msg); }
   catch { toast("Impossible de copier"); }
 }
+function ask(msg, okLabel = "Confirmer") {
+  return new Promise(res => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal-wrap";
+    wrap.innerHTML = `<div class="modal card"><p>${esc(msg)}</p><div class="row gap-s" style="justify-content:flex-end">
+      <button class="btn ghost" data-no>Annuler</button><button class="btn primary" data-yes>${esc(okLabel)}</button></div></div>`;
+    document.body.appendChild(wrap);
+    const done = v => { wrap.remove(); res(v); };
+    $("[data-no]", wrap).onclick = () => done(false);
+    $("[data-yes]", wrap).onclick = () => done(true);
+    wrap.onclick = e => { if (e.target === wrap) done(false); };
+  });
+}
 function download(name, text, type = "text/markdown") {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type }));
@@ -54,8 +67,9 @@ function showView(name) {
 $$(".nav-item").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
 
 function renderProviderStatus() {
-  $("#providerStatus").innerHTML = ["gemini", "openai", "anthropic"].map(p =>
-    `<div class="ps ${Store.hasKey(p) ? "on" : ""}"><i></i>${PROVIDERS[p].name}${Store.hasKey(p) ? "" : " — pas de clé"}</div>`
+  const provs = SAMPLE ? ["integre", "gemini", "openai", "anthropic"].filter(p => p === "integre" || Store.hasKey(p)) : ["gemini", "openai", "anthropic"];
+  $("#providerStatus").innerHTML = provs.map(p =>
+    `<div class="ps ${Store.hasKey(p) ? "on" : ""}"><i></i>${PROVIDERS[p].name}${p === "integre" ? " intégré" : ""}${Store.hasKey(p) ? "" : " — pas de clé"}</div>`
   ).join("") + (Store.activeProviders().length ? "" : `<div class="ps" style="color:var(--accent)"><i style="background:var(--accent)"></i>Mode démo</div>`);
 }
 
@@ -112,7 +126,18 @@ function renderPanels() {
       <div class="panel-body"><div class="idle">En attente</div></div>
     </div>`).join("");
 }
+const panelQueue = {};
 function setPanel(id, state, content) {
+  if (state === "working") {
+    const first = !panelQueue[id];
+    panelQueue[id] = content;
+    if (first) requestAnimationFrame(() => { const c = panelQueue[id]; delete panelQueue[id]; if (c !== undefined) renderPanelNow(id, "working", c); });
+    return;
+  }
+  delete panelQueue[id];
+  renderPanelNow(id, state, content);
+}
+function renderPanelNow(id, state, content) {
   const p = $(`[data-panel="${id}"]`); if (!p) return;
   p.classList.toggle("working", state === "working");
   const body = $(".panel-body", p);
@@ -291,7 +316,8 @@ async function laboSend() {
     const p = $(`[data-labo="${a.id}"]`), body = $(".panel-body", p);
     try {
       const r = Store.resolve(a);
-      const out = await callLLM({ ...r, system: agentSystem(a), messages: [{ role: "user", content: text }] });
+      const out = await callLLM({ ...r, system: agentSystem(a), messages: [{ role: "user", content: text }],
+        onText: t => { body.innerHTML = `<div class="md">${md(t)}</div>`; } });
       laboResults[a.id] = out;
       body.innerHTML = `<div class="md">${md(out)}</div>`;
     } catch (e) { body.innerHTML = `<div class="md" style="color:#F26B6B">${esc(e.message)}</div>`; }
@@ -358,7 +384,10 @@ async function chatSend() {
   $("#chatLog").scrollTop = 1e9;
   chatBusy = true;
   try {
-    const out = await callLLM({ ...Store.resolve(a), system: agentSystem(a), messages: chatHistory.slice(-20) });
+    const hist = chatHistory.slice(-20);
+    if (hist[0]?.role === "assistant") hist.shift();
+    const out = await callLLM({ ...Store.resolve(a), system: agentSystem(a), messages: hist, chat: true,
+      onText: t => { const b = $("#chatTyping .bubble"); if (b) { b.className = "bubble md"; b.innerHTML = md(t); $("#chatLog").scrollTop = 1e9; } } });
     chatHistory.push({ role: "assistant", content: out });
   } catch (e) {
     chatHistory.push({ role: "assistant", content: "⚠️ " + e.message });
@@ -380,6 +409,7 @@ $("#chatInput").addEventListener("input", e => { e.target.style.height = ""; e.t
    AGENTS
    ========================================================= */
 function modelOptions(provider, current) {
+  if (provider === "integre") return `<option value="">Choisi par Claude</option>`;
   if (provider === "auto" || provider === "demo") return `<option value="">${provider === "demo" ? "demo" : "Modèle par défaut de l'IA"}</option>`;
   const cfg = Store.providers[provider];
   const list = [...new Set([...(cfg.models?.length ? cfg.models : PROVIDERS[provider].suggestions), cfg.model, current].filter(Boolean))];
@@ -401,7 +431,7 @@ function renderAgents() {
         <label class="f">IA
           <select class="select" data-f="provider">
             <option value="auto" ${a.provider === "auto" ? "selected" : ""}>Auto (première dispo)</option>
-            ${["gemini", "openai", "anthropic", "demo"].map(p => `<option value="${p}" ${a.provider === p ? "selected" : ""}>${PROVIDERS[p].name}${p !== "demo" && !Store.hasKey(p) ? " (pas de clé)" : ""}</option>`).join("")}
+            ${[...(SAMPLE ? ["integre"] : []), "gemini", "openai", "anthropic", "demo"].map(p => `<option value="${p}" ${a.provider === p ? "selected" : ""}>${PROVIDERS[p].name}${p === "integre" ? " intégré (gratuit)" : ""}${p !== "demo" && !Store.hasKey(p) ? " (pas de clé)" : ""}</option>`).join("")}
           </select>
         </label>
         <label class="f">Modèle
@@ -438,8 +468,8 @@ function renderAgents() {
     $$("[data-color]", card).forEach(b => b.addEventListener("click", () => {
       a.color = b.dataset.color; Store.saveAgents(); renderAgents(); refreshAgentViews();
     }));
-    $("[data-remove]", card)?.addEventListener("click", () => {
-      if (!confirm(`Supprimer l'agent « ${a.name} » ?`)) return;
+    $("[data-remove]", card)?.addEventListener("click", async () => {
+      if (!(await ask(`Supprimer l'agent « ${a.name} » ?`, "Supprimer"))) return;
       Store.agents = Store.agents.filter(x => x !== a); Store.saveAgents(); renderAgents(); refreshAgentViews();
     });
   });
@@ -452,8 +482,8 @@ $("#agentAdd").addEventListener("click", () => {
   Store.saveAgents(); renderAgents(); refreshAgentViews();
   setTimeout(() => $(`[data-agent="${id}"] input.name`)?.select(), 50);
 });
-$("#agentsReset").addEventListener("click", () => {
-  if (!confirm("Remettre les agents par défaut ? Tes modifications seront perdues.")) return;
+$("#agentsReset").addEventListener("click", async () => {
+  if (!(await ask("Remettre les agents par défaut ? Tes modifications seront perdues.", "Réinitialiser"))) return;
   Store.agents = structuredClone(DEFAULT_AGENTS); Store.saveAgents(); renderAgents(); refreshAgentViews();
 });
 
@@ -591,8 +621,8 @@ function openHistory(i) {
   setPhase("Archive", "done");
   hooks.final(h.final);
 }
-$("#histClear").addEventListener("click", () => {
-  if (!confirm("Effacer tout l'historique ?")) return;
+$("#histClear").addEventListener("click", async () => {
+  if (!(await ask("Effacer tout l'historique ?", "Effacer"))) return;
   Store.history = []; Store.saveHistory(); renderHistory();
 });
 
@@ -600,7 +630,16 @@ $("#histClear").addEventListener("click", () => {
    PARAMÈTRES
    ========================================================= */
 function renderSettings() {
-  $("#providerSettings").innerHTML = ["gemini", "openai", "anthropic"].map(p => {
+  const integreCard = SAMPLE ? `<div class="card prov-card">
+      <div class="pc-head">
+        <div class="pc-logo" style="background:${PROVIDERS.integre.color}">C</div>
+        <div><strong>Claude intégré</strong><small>Inclus dans ton abonnement · aucune clé</small></div>
+        <span class="pill done">Actif</span>
+      </div>
+      <p class="hint">Tous les agents réglés sur « Auto » ou « Claude intégré » l'utilisent. La première fois, claude.ai te demande d'autoriser la page.</p>
+    </div>` : "";
+  const note = IS_EMBEDDED ? `<p class="hint" style="color:var(--accent)">Les clés externes ne fonctionnent que sur la version GitHub du site (ici, le navigateur bloque ces connexions).</p>` : "";
+  $("#providerSettings").innerHTML = integreCard + ["gemini", "openai", "anthropic"].map(p => {
     const P = PROVIDERS[p], cfg = Store.providers[p];
     const models = cfg.models?.length ? cfg.models : P.suggestions;
     return `<div class="card prov-card" data-prov="${p}">
@@ -619,11 +658,11 @@ function renderSettings() {
       <div class="row" style="justify-content:space-between">
         <a href="${P.keyUrl}" target="_blank" rel="noopener">Obtenir une clé ↗</a>
         <span class="pc-msg" data-msg></span>
-      </div>
+      </div>${note}
     </div>`;
   }).join("");
 
-  $$(".prov-card").forEach(card => {
+  $$(".prov-card[data-prov]").forEach(card => {
     const p = card.dataset.prov, cfg = Store.providers[p], msg = $("[data-msg]", card);
     const keyInp = $("[data-key]", card);
     keyInp.addEventListener("change", () => {
@@ -661,7 +700,9 @@ function applyTheme() {
   $("#themeToggle").checked = Store.theme === "light";
 }
 $("#themeToggle").addEventListener("change", e => { Store.theme = e.target.checked ? "light" : "dark"; LS.set("theme", Store.theme); applyTheme(); });
-$("#exportCfg").addEventListener("click", () => download("synkro-agents.json", JSON.stringify({ synkro: 1, agents: Store.agents }, null, 2), "application/json"));
+$("#exportCfg").addEventListener("click", () => IS_EMBEDDED
+  ? copy(JSON.stringify({ synkro: 1, agents: Store.agents }, null, 2), "Agents copiés (colle-les dans un fichier .json)")
+  : download("synkro-agents.json", JSON.stringify({ synkro: 1, agents: Store.agents }, null, 2), "application/json"));
 $("#importCfg").addEventListener("change", async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
@@ -671,8 +712,8 @@ $("#importCfg").addEventListener("change", async e => {
   } catch { toast("Fichier invalide"); }
   e.target.value = "";
 });
-$("#wipeAll").addEventListener("click", () => {
-  if (!confirm("Effacer TOUT (clés, agents, historique, chats) de ce navigateur ?")) return;
+$("#wipeAll").addEventListener("click", async () => {
+  if (!(await ask("Effacer TOUT (clés, agents, historique, chats) de ce navigateur ?", "Tout effacer"))) return;
   Object.keys(localStorage).filter(k => k.startsWith("synkro.")).forEach(k => localStorage.removeItem(k));
   location.reload();
 });
@@ -681,6 +722,19 @@ $("#wipeAll").addEventListener("click", () => {
    DÉMARRAGE
    ========================================================= */
 Store.init();
+if (IS_EMBEDDED) $$("#finalDownload, #qrDownload").forEach(b => b.hidden = true);
+(async () => {
+  try {
+    const s = await window.claude?.use?.("sample");
+    if (s) {
+      SAMPLE = s;
+      renderProviderStatus();
+      if (!mission) renderMissionIdle();
+      if ($("#view-agents").classList.contains("active")) renderAgents();
+      if ($("#view-parametres").classList.contains("active")) renderSettings();
+    }
+  } catch {}
+})();
 applyTheme();
 renderProviderStatus();
 renderMissionIdle();

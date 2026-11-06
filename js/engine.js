@@ -34,9 +34,9 @@ class Mission {
 
   stop() { this.stopped = true; this.ctrl.abort(); }
 
-  async ask(agent, { system, user, json = false }) {
+  async ask(agent, { system, user, json = false, onText }) {
     const r = Store.resolve(agent);
-    return callLLM({ ...r, system, messages: [{ role: "user", content: user }], json, signal: this.ctrl.signal });
+    return callLLM({ ...r, system, messages: [{ role: "user", content: user }], json, onText, signal: this.ctrl.signal });
   }
 
   /* ---------- 1. PLAN ---------- */
@@ -117,6 +117,7 @@ Renvoie le plan en JSON.`;
         this.review = await this.ask(critic, {
           system: agentSystem(critic, "Tu relis le travail de toute l'équipe avant la livraison. Liste les problèmes (erreurs, oublis, incohérences, passages faibles) et les corrections à faire, par ordre d'importance. Sois concis et précis."),
           user: `OBJECTIF : ${this.goal}\n\nTRAVAIL DE L'ÉQUIPE :\n\n${this.workDump()}`,
+          onText: t => this.h.agent(critic.id, "working", t),
         });
         this.h.agent(critic.id, "done", this.review);
         this.addBoard(critic, "Relecture", this.review);
@@ -138,6 +139,7 @@ Renvoie le plan en JSON.`;
 Assemble le travail de ton équipe en UN livrable final complet, bien structuré et directement utilisable par l'utilisateur.
 ${this.review ? "Applique les corrections demandées par le Critique." : ""}
 Ne parle pas de l'équipe ni du processus : donne directement le résultat.`),
+      onText: t => this.h.agent(chef.id, "working", t.length > 400 ? "J'assemble le résultat final… (" + t.length + " caractères)" : t),
       user: `OBJECTIF : ${this.goal}\n\nTRAVAIL DE L'ÉQUIPE :\n\n${this.workDump()}${this.review ? `\n\n---\nRELECTURE DU CRITIQUE :\n${this.review}` : ""}`,
     });
     this.tasks.forEach(t => this.h.edge(chef.id, t.agentId, "done"));
@@ -173,6 +175,7 @@ Fais uniquement ta tâche, de façon complète et concrète.`;
       task.result = await this.ask(agent, {
         system: agentSystem(agent, "Tu travailles en équipe avec d'autres agents sur un objectif commun."),
         user,
+        onText: t => this.h.agent(agent.id, "working", `**${task.title}**\n\n${t}`),
       });
       task.status = "done";
       this.h.agent(agent.id, "done", `**${task.title}**\n\n${task.result}`);

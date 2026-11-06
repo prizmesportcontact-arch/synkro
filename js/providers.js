@@ -4,6 +4,10 @@
    ========================================================= */
 
 const PROVIDERS = {
+  integre: {
+    name: "Claude", by: "Intégré · inclus dans ton abonnement", color: "#D97757", letter: "C",
+    defaultModel: "intégré", suggestions: ["intégré"],
+  },
   gemini: {
     name: "Gemini", by: "Google", color: "#3D7BFF", letter: "G",
     keyUrl: "https://aistudio.google.com/apikey",
@@ -40,6 +44,7 @@ class LLMError extends Error {}
 async function callLLM(opts) {
   const { provider } = opts;
   if (provider === "demo") return demoCall(opts);
+  if (provider === "integre") return callIntegre(opts);
   if (!opts.key) throw new LLMError(`Pas de clé ${PROVIDERS[provider].name}. Ajoute-la dans Paramètres.`);
   if (provider === "gemini") return callGemini(opts);
   if (provider === "openai") return callOpenAI(opts);
@@ -59,8 +64,39 @@ async function readError(res) {
   return new LLMError(txt);
 }
 
+/* ---------- Claude intégré (page publiée sur claude.ai) ---------- */
+let SAMPLE = null;          // fonction "sample" fournie par claude.ai, ou null
+const IS_EMBEDDED = (() => { try { return window.top !== window.self; } catch { return true; } })();
+
+async function callIntegre({ system, messages, json, signal, onText, chat }) {
+  if (!SAMPLE) throw new LLMError("Claude intégré n'est pas disponible ici.");
+  const msgs = messages.map(m => ({ role: m.role, content: m.content }));
+  const head = `CONSIGNES (à suivre, ne pas répéter) :\n${system || ""}${json ? "\n\nRéponds UNIQUEMENT avec du JSON valide, sans texte autour." : ""}\n\n---\n\n`;
+  msgs[0] = { ...msgs[0], content: head + msgs[0].content };
+  try {
+    const r = await SAMPLE(msgs, {
+      signal,
+      cache: chat ? false : undefined,
+      onText: onText ? ({ text }) => { if (text && text !== "Thinking...") onText(text); } : undefined,
+    });
+    if (!r?.text) throw new LLMError("Réponse vide de Claude");
+    return r.text;
+  } catch (e) {
+    if (e?.name === "AbortError" || signal?.aborted) throw new DOMException("Arrêté", "AbortError");
+    if (e instanceof LLMError) throw e;
+    if (e?.code === "rate_limited" && !callIntegre._retry) {
+      callIntegre._retry = true;
+      try { await sleep(5000, signal); return await callIntegre({ system, messages, json, signal, onText, chat }); }
+      finally { callIntegre._retry = false; }
+    }
+    if (e?.code === "rate_limited") throw new LLMError("Trop de demandes d'un coup, attends un peu puis relance.");
+    if (e?.code === "not_granted") throw new LLMError("Autorisation refusée : accepte la demande d'accès à Claude puis relance.");
+    throw new LLMError(e?.message || "Erreur de Claude");
+  }
+}
+
 /* ---------- Gemini ---------- */
-async function callGemini({ model, key, system, messages, json, signal }) {
+async function callGemini({ onText, chat,  model, key, system, messages, json, signal }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const body = {
     contents: messages.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
@@ -81,7 +117,7 @@ async function callGemini({ model, key, system, messages, json, signal }) {
 }
 
 /* ---------- OpenAI ---------- */
-async function callOpenAI({ model, key, system, messages, json, signal }) {
+async function callOpenAI({ onText, chat,  model, key, system, messages, json, signal }) {
   const msgs = [];
   if (system) msgs.push({ role: "system", content: system });
   msgs.push(...messages);
@@ -100,7 +136,7 @@ async function callOpenAI({ model, key, system, messages, json, signal }) {
 }
 
 /* ---------- Anthropic ---------- */
-async function callAnthropic({ model, key, system, messages, json, signal }) {
+async function callAnthropic({ onText, chat,  model, key, system, messages, json, signal }) {
   const body = { model, max_tokens: 4096, messages };
   if (system) body.system = system + (json ? "\n\nRéponds UNIQUEMENT avec du JSON valide, sans texte autour." : "");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
