@@ -54,6 +54,16 @@ async function callOnce(opts) {
   throw new LLMError("Fournisseur inconnu : " + provider);
 }
 
+/** Bloc de code ouvert mais pas refermé ? */
+function insideCode(t) { return ((t.match(/^\s*```/gm) || []).length % 2) === 1; }
+/** La réponse a l'air coupée (bloc de code pas fermé, page HTML pas finie…) ? */
+function looksCut(t) {
+  if (insideCode(t)) return true;
+  if (/<html[\s>]/i.test(t) && !/<\/html>/i.test(t)) return true;
+  if (/<script[\s>]/i.test(t) && (t.match(/<script[\s>]/gi) || []).length > (t.match(/<\/script>/gi) || []).length) return true;
+  return false;
+}
+
 /** Appelle l'IA ; si la réponse est coupée (trop longue), demande la suite
  *  automatiquement et recolle les morceaux. */
 async function callLLM(opts) {
@@ -65,8 +75,11 @@ async function callLLM(opts) {
       ...opts, messages,
       onText: opts.onText ? t => opts.onText(prefix + t) : undefined,
     });
-    full += r.text;
-    if (!r.truncated) return full;
+    let chunk = r.text;
+    // Si on était dans un bloc de code et que l'IA le rouvre, on enlève la ligne en trop
+    if (round > 0 && insideCode(full)) chunk = chunk.replace(/^\s*```[\w-]*[ \t]*\n/, "");
+    full += chunk;
+    if (!r.truncated && !looksCut(full)) return full;
     opts.onText?.(full + "\n\n*…suite en cours…*");
     messages = [
       ...opts.messages,

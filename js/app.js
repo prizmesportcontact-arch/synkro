@@ -12,7 +12,8 @@ try {
     const raw = typeof code === "object" ? code.text : code;
     const l = String((typeof code === "object" ? code.lang : lang) || "").trim().split(/\s+/)[0].toLowerCase();
     const isHtml = l === "html" || /^\s*<(!doctype|html)/i.test(raw);
-    return `<div class="codeblock"><div class="cb-bar"><span>${esc(l || "code")}</span>
+    const n = raw.split("\n").length;
+    return `<div class="codeblock"><div class="cb-bar"><span>${esc(l || "code")} · ${n} ligne${n > 1 ? "s" : ""}</span>
       ${isHtml ? `<button class="cb-btn run" data-cb="run">▶ Lancer</button>` : ""}
       <button class="cb-btn" data-cb="save">Enregistrer</button>
       <button class="cb-btn" data-cb="copy">Copier le code</button></div>
