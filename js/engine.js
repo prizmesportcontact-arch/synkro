@@ -171,7 +171,8 @@ Renvoie le plan en JSON.`;
       system: agentSystem(chef, `MODE SYNTHÈSE.
 Assemble le travail de ton équipe en UN livrable final complet, bien structuré et directement utilisable par l'utilisateur.
 ${this.review ? "Applique les corrections demandées par le Critique." : ""}
-Ne parle pas de l'équipe ni du processus : donne directement le résultat.`),
+Ne parle pas de l'équipe ni du processus : donne directement le résultat.
+Si le livrable est du code (jeu, site, script), donne le fichier COMPLET et fonctionnel dans un seul bloc de code (pour un jeu ou un site : un seul fichier HTML autonome), sans « … » ni partie omise, en intégrant les corrections.`),
       onText: t => this.h.agent(chef.id, "working", t.length > 400 ? "J'assemble le résultat final… (" + t.length + " caractères)" : t),
       user: `OBJECTIF : ${this.goal}\n\nTRAVAIL DE L'ÉQUIPE :\n\n${this.workDump()}${this.review ? `\n\n---\nRELECTURE DU CRITIQUE :\n${this.review}` : ""}`,
     });

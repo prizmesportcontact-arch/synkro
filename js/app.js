@@ -6,6 +6,19 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* Blocs de code : barre avec Copier / Lancer / Enregistrer */
+try {
+  marked.use({ renderer: { code(code, lang) {
+    const raw = typeof code === "object" ? code.text : code;
+    const l = String((typeof code === "object" ? code.lang : lang) || "").trim().split(/\s+/)[0].toLowerCase();
+    const isHtml = l === "html" || /^\s*<(!doctype|html)/i.test(raw);
+    return `<div class="codeblock"><div class="cb-bar"><span>${esc(l || "code")}</span>
+      ${isHtml ? `<button class="cb-btn run" data-cb="run">▶ Lancer</button>` : ""}
+      <button class="cb-btn" data-cb="save">Enregistrer</button>
+      <button class="cb-btn" data-cb="copy">Copier le code</button></div>
+      <pre><code data-lang="${esc(l)}">${esc(raw)}</code></pre></div>`;
+  } } });
+} catch {}
 const md = s => {
   try { return DOMPurify.sanitize(marked.parse(String(s ?? ""), { breaks: true })); }
   catch { return esc(s).replace(/\n/g, "<br>"); }
@@ -32,6 +45,57 @@ function ask(msg, okLabel = "Confirmer") {
     wrap.onclick = e => { if (e.target === wrap) done(false); };
   });
 }
+let DOWNLOADS = null;
+const EXT_OK = ["txt", "json", "md", "csv", "html", "svg", "png"];
+async function saveFile(name, data) {
+  if (DOWNLOADS) {
+    const ext = name.split(".").pop().toLowerCase();
+    if (!EXT_OK.includes(ext)) name += ".txt";
+    try { await DOWNLOADS.save({ filename: name, data }); toast("Fichier enregistré"); }
+    catch (e) { if (e?.code !== "declined") toast("Impossible d'enregistrer : " + (e?.message || e?.code || "erreur")); }
+    return;
+  }
+  if (IS_EMBEDDED) { toast("Enregistrement indisponible ici, utilise Copier"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data]));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function openPreview(code) {
+  const wrap = document.createElement("div");
+  wrap.className = "modal-wrap";
+  wrap.innerHTML = `<div class="preview card">
+    <div class="card-title"><span>Aperçu</span><div class="row gap-s">
+      <button class="btn ghost sm" data-pv="reload">Relancer</button>
+      <button class="btn ghost sm" data-pv="full">Plein écran</button>
+      <button class="btn primary sm" data-pv="close">Fermer</button></div></div>
+    <iframe sandbox="allow-scripts allow-pointer-lock" allow="fullscreen"></iframe></div>`;
+  document.body.appendChild(wrap);
+  const frame = $("iframe", wrap);
+  const load = () => { frame.srcdoc = code; setTimeout(() => frame.focus(), 300); };
+  load();
+  const close = () => { frame.srcdoc = ""; wrap.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  $("[data-pv=close]", wrap).onclick = close;
+  $("[data-pv=reload]", wrap).onclick = load;
+  $("[data-pv=full]", wrap).onclick = () => frame.requestFullscreen?.().catch(() => toast("Plein écran refusé"));
+}
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-cb]"); if (!b) return;
+  e.stopPropagation();
+  const codeEl = b.closest(".codeblock")?.querySelector("pre code"); if (!codeEl) return;
+  const code = codeEl.textContent, lang = codeEl.dataset.lang || "";
+  if (b.dataset.cb === "copy") copy(code, "Code copié");
+  if (b.dataset.cb === "run") openPreview(code);
+  if (b.dataset.cb === "save") {
+    const ext = { html: "html", json: "json", md: "markdown", csv: "csv", svg: "svg" }[lang] || (/^\s*<(!doctype|html)/i.test(code) ? "html" : "txt");
+    const title = (code.match(/<title>([^<]{1,60})<\/title>/i)?.[1] || "synkro-code").replace(/[^\p{L}\p{N}\- ]+/gu, "").trim() || "synkro-code";
+    saveFile(`${title}.${ext === "markdown" ? "md" : ext}`, code);
+  }
+}, true);
+
 function download(name, text, type = "text/markdown") {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type }));
@@ -283,7 +347,7 @@ $("#missionReset").addEventListener("click", () => {
   $("#goalInput").value = ""; $("#missionReset").hidden = true; renderMissionIdle();
 });
 $("#finalCopy").addEventListener("click", () => copy(mission?.final || ""));
-$("#finalDownload").addEventListener("click", () => download("synkro-resultat.md", `# ${mission?.goal}\n\n${mission?.final || ""}`));
+$("#finalDownload").addEventListener("click", () => saveFile("synkro-resultat.md", `# ${mission?.goal}\n\n${mission?.final || ""}`));
 
 /* =========================================================
    LABO — même demande à plusieurs agents
@@ -561,7 +625,7 @@ $("#qrDownload").addEventListener("click", () => {
   const c = $("#qrBox canvas"); if (!c) return;
   const out = document.createElement("canvas"), pad = 40; out.width = out.height = c.width + pad * 2;
   const ctx = out.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, out.width, out.height); ctx.drawImage(c, pad, pad);
-  const a = document.createElement("a"); a.href = out.toDataURL("image/png"); a.download = "qrcode.png"; a.click();
+  out.toBlob(b => b && saveFile("qrcode.png", b), "image/png");
 });
 
 /* --- Noms --- */
@@ -799,6 +863,12 @@ $("#wipeAll").addEventListener("click", async () => {
 Store.init();
 Store.history = Store.history.map((h, i) => ({ status: "done", ...h, id: h.id || "old" + i + h.date }));
 if (IS_EMBEDDED) $$("#finalDownload, #qrDownload").forEach(b => b.hidden = true);
+(async () => {
+  try {
+    const d = await window.claude?.use?.("downloads");
+    if (d) { DOWNLOADS = d; $$("#finalDownload, #qrDownload").forEach(b => b.hidden = false); }
+  } catch {}
+})();
 (async () => {
   try {
     const s = await window.claude?.use?.("sample");

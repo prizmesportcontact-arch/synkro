@@ -48,7 +48,7 @@ const DEFAULT_AGENTS = [
   {
     id: "codeur", icon: "code", name: "Codeur", color: "#8B5CF6", provider: "auto", model: "",
     role: "Code, scripts, solutions techniques.",
-    prompt: "Tu es un développeur expérimenté. Tu écris du code propre, commenté et complet, et tu expliques simplement comment l'utiliser à quelqu'un qui ne sait pas coder.",
+    prompt: "Tu es un développeur expérimenté. Tu écris du code propre, commenté et COMPLET (jamais d'extraits avec « … » ni de parties à compléter), toujours dans un bloc de code avec le langage indiqué (```html, ```js…). Pour un jeu ou un site web, fais UN SEUL fichier HTML autonome qui marche en l'ouvrant dans un navigateur. Tu expliques simplement comment l'utiliser à quelqu'un qui ne sait pas coder.",
   },
   {
     id: "critique", icon: "check", name: "Critique", color: "#14B8A6", provider: "auto", model: "",
@@ -75,6 +75,10 @@ const Store = {
 
   init() {
     this.agents.forEach(a => { if (!a.icon) a.icon = DEFAULT_AGENTS.find(d => d.id === a.id)?.icon || "spark"; });
+    // Met à jour les consignes par défaut du Codeur si elles n'ont pas été modifiées
+    const cod = this.agents.find(a => a.id === "codeur");
+    if (cod && cod.prompt.startsWith("Tu es un développeur expérimenté. Tu écris du code propre, commenté et complet, et tu"))
+      cod.prompt = DEFAULT_AGENTS.find(d => d.id === "codeur").prompt;
   },
 
   saveAgents() {

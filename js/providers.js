@@ -41,15 +41,40 @@ class LLMError extends Error {}
  *  opts = { provider, model, key, system, messages:[{role:'user'|'assistant', content}], json, signal }
  *  → Promise<string>
  */
-async function callLLM(opts) {
+const MAX_CONTINUES = 6;
+
+async function callOnce(opts) {
   const { provider } = opts;
-  if (provider === "demo") return demoCall(opts);
+  if (provider === "demo") return { text: await demoCall(opts), truncated: false };
   if (provider === "integre") return callIntegre(opts);
   if (!opts.key) throw new LLMError(`Pas de clé ${PROVIDERS[provider].name}. Ajoute-la dans Paramètres.`);
   if (provider === "gemini") return callGemini(opts);
   if (provider === "openai") return callOpenAI(opts);
   if (provider === "anthropic") return callAnthropic(opts);
   throw new LLMError("Fournisseur inconnu : " + provider);
+}
+
+/** Appelle l'IA ; si la réponse est coupée (trop longue), demande la suite
+ *  automatiquement et recolle les morceaux. */
+async function callLLM(opts) {
+  let full = "";
+  let messages = opts.messages;
+  for (let round = 0; round <= MAX_CONTINUES; round++) {
+    const prefix = full;
+    const r = await callOnce({
+      ...opts, messages,
+      onText: opts.onText ? t => opts.onText(prefix + t) : undefined,
+    });
+    full += r.text;
+    if (!r.truncated) return full;
+    opts.onText?.(full + "\n\n*…suite en cours…*");
+    messages = [
+      ...opts.messages,
+      { role: "assistant", content: full },
+      { role: "user", content: "Ta réponse a été coupée car trop longue. Continue EXACTEMENT à partir du dernier caractère écrit, sans rien répéter, sans phrase d'introduction ni commentaire (si tu étais dans un bloc de code, continue le code sans rouvrir de bloc)." },
+    ];
+  }
+  return full;
 }
 
 async function readError(res) {
@@ -80,7 +105,7 @@ async function callIntegre({ system, messages, json, signal, onText, chat }) {
       onText: onText ? ({ text }) => { if (text && text !== "Thinking...") onText(text); } : undefined,
     });
     if (!r?.text) throw new LLMError("Réponse vide de Claude");
-    return r.text;
+    return { text: r.text, truncated: !!r.truncated };
   } catch (e) {
     if (e?.name === "AbortError" || signal?.aborted) throw new DOMException("Arrêté", "AbortError");
     if (e instanceof LLMError) throw e;
@@ -113,7 +138,7 @@ async function callGemini({ onText, chat,  model, key, system, messages, json, s
   const cand = data.candidates?.[0];
   const text = cand?.content?.parts?.map(p => p.text || "").join("") || "";
   if (!text) throw new LLMError("Réponse vide de Gemini" + (cand?.finishReason ? ` (${cand.finishReason})` : ""));
-  return text;
+  return { text, truncated: cand?.finishReason === "MAX_TOKENS" };
 }
 
 /* ---------- OpenAI ---------- */
@@ -132,12 +157,12 @@ async function callOpenAI({ onText, chat,  model, key, system, messages, json, s
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content || "";
   if (!text) throw new LLMError("Réponse vide de ChatGPT");
-  return text;
+  return { text, truncated: data.choices?.[0]?.finish_reason === "length" };
 }
 
 /* ---------- Anthropic ---------- */
 async function callAnthropic({ onText, chat,  model, key, system, messages, json, signal }) {
-  const body = { model, max_tokens: 4096, messages };
+  const body = { model, max_tokens: 8192, messages };
   if (system) body.system = system + (json ? "\n\nRéponds UNIQUEMENT avec du JSON valide, sans texte autour." : "");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST", signal,
@@ -153,7 +178,7 @@ async function callAnthropic({ onText, chat,  model, key, system, messages, json
   const data = await res.json();
   const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
   if (!text) throw new LLMError("Réponse vide de Claude");
-  return text;
+  return { text, truncated: data.stop_reason === "max_tokens" };
 }
 
 /* ---------- Liste des modèles (bouton "Tester") ---------- */
