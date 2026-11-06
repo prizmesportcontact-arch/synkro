@@ -114,7 +114,7 @@ async function callIntegre({ system, messages, json, signal, onText, chat }) {
   try {
     const r = await SAMPLE(msgs, {
       signal,
-      cache: chat ? false : undefined,
+      cache: false,
       onText: onText ? ({ text }) => { if (text && text !== "Thinking...") onText(text); } : undefined,
     });
     if (!r?.text) throw new LLMError("Réponse vide de Claude");
