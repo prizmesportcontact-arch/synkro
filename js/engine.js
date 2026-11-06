@@ -29,8 +29,38 @@ class Mission {
     this.board = [];
     this.review = "";
     this.final = "";
+    this.summary = "";
     this.stopped = false;
+    this.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    this.date = Date.now();
+    this.status = "planning"; // planning | awaiting | running | done | stopped | error
   }
+
+  /** Recrée une mission sauvegardée pour la reprendre. */
+  static fromRecord(rec, hooks) {
+    const m = new Mission(rec.goal, rec.opts || {}, hooks);
+    Object.assign(m, {
+      id: rec.id, date: rec.date, summary: rec.summary || "",
+      review: rec.review || "", final: rec.final || "", status: rec.status,
+      tasks: (rec.tasks || []).map((t, i) => ({
+        id: t.id || "t" + (i + 1), agentId: t.agentId, title: t.title, instructions: t.instructions || "",
+        deps: t.deps || [], result: t.result || "",
+        status: t.status === "done" ? "done" : "pending", // les tâches coupées ou ratées sont refaites
+      })),
+    });
+    return m;
+  }
+
+  toRecord() {
+    return {
+      id: this.id, date: this.date, updated: Date.now(), goal: this.goal, opts: this.opts,
+      status: this.status, summary: this.summary,
+      tasks: this.tasks.map(t => ({ id: t.id, agentId: t.agentId, title: t.title, instructions: t.instructions, deps: t.deps, status: t.status, result: t.result })),
+      review: this.review, final: this.final,
+    };
+  }
+
+  save(status) { if (status) this.status = status; this.h.save?.(this); }
 
   stop() { this.stopped = true; this.ctrl.abort(); }
 
@@ -89,6 +119,7 @@ Renvoie le plan en JSON.`;
     this.h.agent(chef.id, "done", `**Plan prêt** — ${this.tasks.length} tâches.\n\n${this.summary}`);
     this.h.node(chef.id, "idle");
     this.h.plan(this.tasks);
+    this.save("awaiting");
     return this.tasks;
   }
 
@@ -96,6 +127,7 @@ Renvoie le plan en JSON.`;
   async run() {
     const chef = Store.chef();
     this.h.phase("Exécution", "live");
+    this.save("running");
 
     while (!this.stopped) {
       const pending = this.tasks.filter(t => t.status === "pending");
@@ -108,7 +140,7 @@ Renvoie le plan en JSON.`;
 
     /* ---------- 3. RELECTURE ---------- */
     const critic = Store.critique();
-    if (this.opts.review && critic) {
+    if (this.opts.review && critic && !this.review) {
       this.h.phase("Relecture", "live");
       this.h.agent(critic.id, "working", "Je relis tout le travail de l'équipe…");
       this.h.node(critic.id, "working");
@@ -121,6 +153,7 @@ Renvoie le plan en JSON.`;
         });
         this.h.agent(critic.id, "done", this.review);
         this.addBoard(critic, "Relecture", this.review);
+        this.save();
       } catch (e) {
         if (e.name === "AbortError") throw e;
         this.h.agent(critic.id, "error", e.message);
@@ -146,6 +179,7 @@ Ne parle pas de l'équipe ni du processus : donne directement le résultat.`),
     this.h.node(chef.id, "idle");
     this.h.agent(chef.id, "done", "Résultat final livré ✓");
     this.h.phase("Terminé", "done");
+    this.save("done");
     this.h.final(this.final);
     return this.final;
   }
@@ -190,6 +224,7 @@ Fais uniquement ta tâche, de façon complète et concrète.`;
     task.deps.forEach(d => { const dt = this.tasks.find(x => x.id === d); if (dt) this.h.edge(dt.agentId, agent.id, "done"); });
     this.h.node(agent.id, "idle");
     this.h.task(task);
+    this.save();
   }
 
   workDump() {
@@ -202,11 +237,5 @@ Fais uniquement ta tâche, de façon complète et concrète.`;
     this.h.board(e);
   }
 
-  toHistory() {
-    return {
-      id: Date.now().toString(36), date: Date.now(), goal: this.goal,
-      tasks: this.tasks.map(t => ({ id: t.id, deps: t.deps, title: t.title, agentId: t.agentId, status: t.status, result: t.result })),
-      review: this.review, final: this.final,
-    };
-  }
+
 }

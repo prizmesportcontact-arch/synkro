@@ -77,9 +77,25 @@ const Store = {
     this.agents.forEach(a => { if (!a.icon) a.icon = DEFAULT_AGENTS.find(d => d.id === a.id)?.icon || "spark"; });
   },
 
-  saveAgents() { LS.set("agents", this.agents); },
+  saveAgents() {
+    LS.set("agents", this.agents);
+    clearTimeout(this._agT);
+    this._agT = setTimeout(() => Cloud.saveAgents(this.agents), 700);
+  },
   saveProviders() { LS.set("providers", this.providers); },
   saveHistory() { LS.set("history", this.history.slice(0, 30)); },
+  upsertMission(rec) {
+    const i = this.history.findIndex(h => h.id === rec.id);
+    if (i >= 0) this.history[i] = rec; else this.history.unshift(rec);
+    this.history.sort((a, b) => b.date - a.date);
+    this.saveHistory();
+    Cloud.saveMission(rec);
+  },
+  deleteMission(id) {
+    this.history = this.history.filter(h => h.id !== id);
+    this.saveHistory();
+    Cloud.deleteMission(id);
+  },
 
   agent(id) { return this.agents.find(a => a.id === id); },
   chef() { return this.agent("chef") || this.agents[0]; },

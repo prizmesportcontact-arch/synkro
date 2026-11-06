@@ -219,6 +219,7 @@ const hooks = {
   plan: tasks => renderPlan(tasks),
   task: () => renderPlan(mission.tasks),
   board: addBoardEntry,
+  save: m => Store.upsertMission(m.toRecord()),
   final: text => {
     $("#finalCard").hidden = false;
     $("#finalOutput").innerHTML = md(text);
@@ -229,6 +230,7 @@ const hooks = {
 async function startMission() {
   const goal = $("#goalInput").value.trim();
   if (!goal) { $("#goalInput").focus(); toast("Écris d'abord un objectif"); return; }
+  if (mission instanceof Mission && mission.status === "awaiting") Store.deleteMission(mission.id);
   renderMissionIdle();
   mission = new Mission(goal, {
     maxTasks: +$("#optMaxTasks").value,
@@ -257,14 +259,13 @@ async function runMission() {
   setRunning(true);
   try {
     await mission.run();
-    Store.history.unshift(mission.toHistory());
-    Store.saveHistory();
   } catch (e) { handleMissionError(e); }
   setRunning(false);
 }
 
 function handleMissionError(e) {
   setRunning(false);
+  if (mission instanceof Mission) mission.save(e.name === "AbortError" ? "stopped" : "error");
   if (e.name === "AbortError") { setPhase("Arrêtée"); toast("Mission arrêtée"); }
   else { setPhase("Erreur"); setPanel(Store.chef().id, "error", "**Erreur :** " + e.message); toast(e.message); }
   $$(".node.working").forEach(n => n.classList.remove("working"));
@@ -394,13 +395,23 @@ async function chatSend() {
   }
   chatBusy = false;
   LS.set("chat." + chatAgentId, chatHistory);
+  Cloud.saveChat(chatAgentId, chatHistory);
   renderChat();
 }
 $("#chatAgent").addEventListener("change", e => {
   chatAgentId = e.target.value; LS.set("chatAgent", chatAgentId);
   chatHistory = LS.get("chat." + chatAgentId, []); renderChat();
+  loadCloudChat();
 });
-$("#chatClear").addEventListener("click", () => { chatHistory = []; LS.del("chat." + chatAgentId); renderChat(); });
+async function loadCloudChat() {
+  if (!Cloud.ready) return;
+  const id = chatAgentId;
+  try {
+    const msgs = await Cloud.loadChat(id);
+    if (msgs && id === chatAgentId && !chatBusy) { chatHistory = msgs; LS.set("chat." + id, msgs); renderChat(); }
+  } catch {}
+}
+$("#chatClear").addEventListener("click", () => { chatHistory = []; LS.del("chat." + chatAgentId); Cloud.deleteChat(chatAgentId); renderChat(); });
 $("#chatSend").addEventListener("click", chatSend);
 $("#chatInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend(); } });
 $("#chatInput").addEventListener("input", e => { e.target.style.height = ""; e.target.style.height = Math.min(e.target.scrollHeight, 180) + "px"; });
@@ -594,36 +605,100 @@ $$("[data-txt]").forEach(b => b.addEventListener("click", () => {
 /* =========================================================
    HISTORIQUE
    ========================================================= */
+const STATUS = {
+  done: ["Terminée", "done"], running: ["Interrompue", "live"], stopped: ["Arrêtée", "live"],
+  error: ["Erreur", "live"], awaiting: ["Plan à valider", "live"], planning: ["Interrompue", "live"],
+};
 function renderHistory() {
   const list = $("#histList");
   if (!Store.history.length) { list.innerHTML = `<div class="card empty">Aucune mission pour l'instant.</div>`; return; }
-  list.innerHTML = Store.history.map((h, i) => `
-    <div class="card hist-item" data-i="${i}">
-      <div class="avatar" style="background:var(--accent)">${h.tasks.length}</div>
+  list.innerHTML = Store.history.map(h => {
+    const [label, kind] = STATUS[h.status || "done"] || STATUS.done;
+    const done = (h.tasks || []).filter(t => t.status === "done").length;
+    return `<div class="card hist-item" data-id="${h.id}">
+      <div class="avatar" style="background:var(--accent)">${(h.tasks || []).length}</div>
       <div class="h-body"><strong>${esc(h.goal)}</strong>
-        <small>${new Date(h.date).toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" })} · ${h.tasks.length} tâches</small></div>
-      <button class="btn ghost sm" data-open="${i}">Ouvrir</button>
-    </div>`).join("");
-  $$("[data-open]", list).forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openHistory(+b.dataset.open); }));
-  $$(".hist-item", list).forEach(c => c.addEventListener("click", () => openHistory(+c.dataset.i)));
+        <small>${new Date(h.date).toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" })} · ${done}/${(h.tasks || []).length} tâches faites</small></div>
+      <span class="pill ${kind}">${label}</span>
+      <button class="btn ${h.status && h.status !== "done" ? "primary" : "ghost"} sm" data-open="${h.id}">${h.status && h.status !== "done" ? "Reprendre" : "Ouvrir"}</button>
+      <button class="btn ghost sm" data-del="${h.id}" title="Supprimer">×</button>
+    </div>`;
+  }).join("");
+  $$("[data-open]", list).forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openHistory(b.dataset.open); }));
+  $$("[data-del]", list).forEach(b => b.addEventListener("click", async e => {
+    e.stopPropagation();
+    if (!(await ask("Supprimer cette mission de l'historique ?", "Supprimer"))) return;
+    Store.deleteMission(b.dataset.del); renderHistory(); checkResume();
+  }));
+  $$(".hist-item", list).forEach(c => c.addEventListener("click", () => openHistory(c.dataset.id)));
 }
-function openHistory(i) {
-  const h = Store.history[i];
-  showView("mission");
+
+function replayRecord(h) {
   renderMissionIdle();
-  mission = { goal: h.goal, final: h.final, tasks: h.tasks, stop() {} };
   $("#goalInput").value = h.goal;
   $("#missionReset").hidden = false;
-  renderPlan(h.tasks.map((t, k) => ({ ...t, id: t.id || "h" + k, deps: t.deps || [], status: t.status })));
-  setPanel(Store.chef().id, "done", "Résultat final livré ✓");
-  h.tasks.forEach(t => { if (t.status === "done") { addBoardEntry({ agentId: t.agentId, title: t.title, text: t.result }); setPanel(t.agentId, "done", `**${t.title}**\n\n${t.result}`); } });
+  (h.tasks || []).forEach(t => {
+    if (t.status === "done") {
+      addBoardEntry({ agentId: t.agentId, title: t.title, text: t.result });
+      setPanel(t.agentId, "done", `**${t.title}**\n\n${t.result}`);
+    }
+  });
   if (h.review && Store.critique()) setPanel(Store.critique().id, "done", h.review);
+}
+
+function openHistory(id) {
+  const h = Store.history.find(x => x.id === id);
+  if (!h) return;
+  if (mission instanceof Mission && ["running", "planning"].includes(mission.status) && !mission.stopped && $("#missionStop").hidden === false) {
+    toast("Une mission tourne déjà : arrête-la d'abord"); return;
+  }
+  showView("mission");
+  if (h.status && h.status !== "done") return resumeMission(h);
+  replayRecord(h);
+  mission = Mission.fromRecord(h, hooks);
+  renderPlan(h.tasks.map((t, k) => ({ ...t, id: t.id || "h" + k, deps: t.deps || [] })));
+  setPanel(Store.chef().id, "done", "Résultat final livré ✓");
   setPhase("Archive", "done");
   hooks.final(h.final);
 }
+
+async function resumeMission(h) {
+  $("#resumeBanner").hidden = true;
+  replayRecord(h);
+  mission = Mission.fromRecord(h, hooks);
+  const left = mission.tasks.filter(t => t.status !== "done").length;
+  if (!mission.tasks.length) { $("#goalInput").value = h.goal; Store.deleteMission(h.id); return startMission(); }
+  if (h.status === "awaiting") {
+    setPhase("À valider", "live");
+    renderPlan(mission.tasks, true);
+    $("#planActions").hidden = false;
+    $("#missionStart").hidden = true;
+    return;
+  }
+  toast(left ? `Reprise : ${left} tâche${left > 1 ? "s" : ""} restante${left > 1 ? "s" : ""}` : "Reprise : assemblage final");
+  await runMission();
+}
+
+let resumeCandidate = null;
+function checkResume() {
+  resumeCandidate = Store.history.find(h => ["running", "planning"].includes(h.status));
+  const busy = mission instanceof Mission && $("#missionStop").hidden === false;
+  $("#resumeBanner").hidden = !resumeCandidate || busy;
+  if (resumeCandidate) {
+    const done = resumeCandidate.tasks.filter(t => t.status === "done").length;
+    $("#resumeText").textContent = `« ${resumeCandidate.goal.slice(0, 90)} » · ${done}/${resumeCandidate.tasks.length} tâches déjà faites`;
+  }
+}
+$("#resumeGo").addEventListener("click", () => resumeCandidate && resumeMission(resumeCandidate));
+$("#resumeIgnore").addEventListener("click", () => {
+  if (resumeCandidate) { resumeCandidate.status = "stopped"; Store.upsertMission(resumeCandidate); }
+  checkResume();
+});
+
 $("#histClear").addEventListener("click", async () => {
   if (!(await ask("Effacer tout l'historique ?", "Effacer"))) return;
-  Store.history = []; Store.saveHistory(); renderHistory();
+  Store.history.forEach(h => Cloud.deleteMission(h.id));
+  Store.history = []; Store.saveHistory(); renderHistory(); checkResume();
 });
 
 /* =========================================================
@@ -722,6 +797,7 @@ $("#wipeAll").addEventListener("click", async () => {
    DÉMARRAGE
    ========================================================= */
 Store.init();
+Store.history = Store.history.map((h, i) => ({ status: "done", ...h, id: h.id || "old" + i + h.date }));
 if (IS_EMBEDDED) $$("#finalDownload, #qrDownload").forEach(b => b.hidden = true);
 (async () => {
   try {
@@ -735,6 +811,35 @@ if (IS_EMBEDDED) $$("#finalDownload, #qrDownload").forEach(b => b.hidden = true)
     }
   } catch {}
 })();
+(async () => {
+  renderSync("…");
+  const ok = await Cloud.init();
+  renderSync(ok ? "on" : "off");
+  if (!ok) { checkResume(); return; }
+  try {
+    const cloudAgents = await Cloud.loadAgents();
+    if (cloudAgents?.length) { Store.agents = cloudAgents; Store.init(); LS.set("agents", Store.agents); }
+    else Cloud.saveAgents(Store.agents);
+
+    const cloudMissions = await Cloud.loadMissions();
+    const byId = new Map(cloudMissions.map(m => [m.id, m]));
+    Store.history.forEach(h => { if (!byId.has(h.id)) { byId.set(h.id, h); Cloud.saveMission(h); } else if ((h.updated || 0) > (byId.get(h.id).updated || 0)) { byId.set(h.id, h); Cloud.saveMission(h); } });
+    Store.history = [...byId.values()].sort((a, b) => b.date - a.date);
+    Store.saveHistory();
+
+    if (!mission || !(mission instanceof Mission)) renderMissionIdle();
+    if ($("#view-agents").classList.contains("active")) renderAgents();
+    if ($("#view-historique").classList.contains("active")) renderHistory();
+    renderLaboChips();
+    loadCloudChat();
+  } catch (e) { console.warn(e); }
+  checkResume();
+})();
+function renderSync(state) {
+  const el = $("#syncStatus"); if (!el) return;
+  el.className = "sync" + (state === "on" ? " on" : "");
+  el.innerHTML = `<i></i>${state === "on" ? "Sauvegardé dans ton compte" : state === "off" ? "Sauvegarde : ce navigateur" : "Connexion au compte…"}`;
+}
 applyTheme();
 renderProviderStatus();
 renderMissionIdle();

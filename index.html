@@ -53,6 +53,7 @@
       </nav>
 
       <div class="sidebar-bottom">
+        <div class="sync" id="syncStatus"></div>
         <div class="provider-status" id="providerStatus"></div>
         <button class="nav-item" data-view="parametres">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -75,6 +76,15 @@
             <button class="btn ghost" id="missionReset" hidden>Nouvelle mission</button>
           </div>
         </header>
+
+        <div class="card resume-card" id="resumeBanner" hidden>
+          <div class="row gap-m">
+            <div class="avatar" style="background:var(--accent)"><svg viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/></svg></div>
+            <div style="flex:1;min-width:0"><strong>Mission interrompue</strong><div class="muted small" id="resumeText"></div></div>
+            <button class="btn ghost sm" id="resumeIgnore">Ignorer</button>
+            <button class="btn primary sm" id="resumeGo">Reprendre</button>
+          </div>
+        </div>
 
         <div class="card goal-card">
           <textarea id="goalInput" rows="2" placeholder="Ex : Prépare-moi le lancement de mon jeu Roblox : nom, pitch, plan de com sur 2 semaines et description pour la page du jeu"></textarea>
@@ -303,6 +313,7 @@
 
   <script src="js/providers.js"></script>
   <script src="js/store.js"></script>
+  <script src="js/cloud.js"></script>
   <script src="js/engine.js"></script>
   <script src="js/app.js"></script>
 </body>
